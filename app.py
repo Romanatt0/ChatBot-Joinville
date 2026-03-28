@@ -130,9 +130,10 @@ async def main():
             prefix = "**Você:**" if msg["role"] == "user" else "**Bot:**"
             st.markdown(f"{prefix} {msg['content']}")
 
+    with st.form(key="chat_form", clear_on_submit=True):
         user_input = st.text_input("Digite sua mensagem")
-
-    if st.button("Enviar") and user_input:
+        submit = st.form_submit_button("Enviar")
+    if submit and user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
 
         with st.spinner("Gerando resposta..."):
