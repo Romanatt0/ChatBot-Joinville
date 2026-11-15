@@ -1,8 +1,15 @@
+# Dependências do modo CLOUD (é este arquivo que o Streamlit Community Cloud instala).
+# Para rodar localmente com Ollama e Chroma, use requirements-local.txt.
 streamlit>=1.55
 langchain>=1.2
-langchain-core>=1.2
-langchain-ollama>=1.0
-langchain-chroma>=1.1
-langchain-mcp-adapters>=0.2
+langchain-core>=1.7
+langchain-community>=0.4
 langchain-text-splitters>=1.1
-chromadb>=1.5
+langchain-mcp-adapters>=0.2
+langchain-groq>=1.1
+langchain-openai>=1.7
+langchain-anthropic>=1.7
+langchain-qdrant>=1.1
+qdrant-client>=1.20
+fastembed>=0.9
+tomli>=2.0; python_version < "3.11"

@@ -1,7 +1,12 @@
-"""Gera a base vetorial (Chroma) a partir de dados/joinville.md.
+"""Cria (ou recria) o banco vetorial a partir de dados/joinville.md.
 
-Rode sempre que alterar o texto ou o modelo de embeddings:
-    python rag.py
+Uso:
+    python ingestao.py                    # destino do MODO atual (local=chroma, cloud=qdrant)
+    python ingestao.py --destino chroma
+    python ingestao.py --destino qdrant   # precisa de QDRANT_URL e QDRANT_API_KEY
+    python ingestao.py --destino ambos
+
+Rode de novo sempre que alterar o texto ou o EMBEDDING_MODEL.
 
 Como o texto é dividido:
 - Cada seção do Markdown (## / ###) é dividida separadamente, então um trecho
@@ -11,14 +16,14 @@ Como o texto é dividido:
 - Todo trecho começa com o caminho da seção (ex.: "[Joinville > História > ...]"),
   o que dá contexto tanto para a busca quanto para o modelo.
 """
+import argparse
 import re
+import time
 
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-import config
+from chatville import banco, config
 
 REFERENCIAS = re.compile(r"\[(\d+|carece de fontes|nota \d+)\]")  # marcas da Wikipédia
 
@@ -45,33 +50,32 @@ def dividir(markdown: str) -> list[Document]:
             pedacos = splitter.split_text(secao.page_content)
 
         for pedaco in pedacos:
-            docs.append(Document(
-                page_content=f"[{caminho}]\n{pedaco}",
-                metadata={"secao": caminho},
-            ))
+            docs.append(Document(page_content=f"[{caminho}]\n{pedaco}", metadata={"secao": caminho}))
     return docs
 
 
-def main():
+def carregar_documentos() -> list[Document]:
     with open(config.SOURCE_TEXT, "r", encoding="utf-8") as f:
-        docs = dividir(limpar(f.read()))
+        return dividir(limpar(f.read()))
 
-    embeddings = OllamaEmbeddings(model=config.EMBEDDING_MODEL)
 
-    # Recria a coleção do zero para não duplicar trechos a cada execução.
-    Chroma(
-        persist_directory=config.CHROMA_DIR,
-        embedding_function=embeddings,
-        collection_name=config.COLLECTION_NAME,
-    ).delete_collection()
+def main():
+    parser = argparse.ArgumentParser(description="Cria o banco vetorial do Chat Ville.")
+    parser.add_argument("--destino", choices=[*banco.DESTINOS, "ambos"], default=banco.destino_do_modo(),
+                        help="onde gravar (padrão: chroma no modo local, qdrant no modo cloud)")
+    args = parser.parse_args()
+    destinos = banco.DESTINOS if args.destino == "ambos" else (args.destino,)
 
-    Chroma.from_documents(
-        documents=docs,
-        embedding=embeddings,
-        persist_directory=config.CHROMA_DIR,
-        collection_name=config.COLLECTION_NAME,
-    )
-    print(f"{len(docs)} trechos indexados em {config.CHROMA_DIR} (coleção '{config.COLLECTION_NAME}').")
+    docs = carregar_documentos()
+    print(f"{len(docs)} trechos gerados a partir de {config.SOURCE_TEXT}")
+    print(f"Embedding: {config.EMBEDDING_MODEL} (o download acontece só na primeira vez)")
+    embeddings = banco.get_embeddings()
+
+    for destino in destinos:
+        inicio = time.time()
+        banco.gravar([Document(page_content=d.page_content, metadata=dict(d.metadata)) for d in docs],
+                     embeddings, destino)
+        print(f"✔ {destino}: coleção '{config.COLLECTION_NAME}' recriada em {time.time() - inicio:.0f}s")
 
 
 if __name__ == "__main__":

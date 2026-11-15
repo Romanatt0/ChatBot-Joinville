@@ -1,0 +1,40 @@
+# Provedores e modelos que aparecem na barra lateral.
+# Edite à vontade: a ordem dos provedores é a ordem do seletor e o primeiro
+# modelo de cada lista é o padrão. Na barra lateral também existe a opção
+# "Outro (digitar)…" para usar um modelo que não está aqui.
+#
+# IMPORTANTE: o agente usa ferramentas, então só funcionam modelos com
+# suporte a tool calling / function calling.
+
+[groq]
+nome = "Groq"
+modelos = [
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
+    "llama-3.1-8b-instant",
+]
+
+[openai]
+nome = "OpenAI"
+modelos = [
+    "gpt-6-luna",
+    "gpt-6.1-terra",
+    "gpt-6.1-sol",
+]
+
+[anthropic]
+nome = "Anthropic"
+modelos = [
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+]
+
+[ollama]
+nome = "Ollama (local)"
+somente_local = true   # não aparece no modo cloud
+modelos = [
+    "qwen2.5:3b",
+    "llama3.1:8b",
+]

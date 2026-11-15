@@ -22,5 +22,8 @@ dist/
 # OS files
 .DS_Store
 
-# Base vetorial (gerar com: python rag.py)
+# Base vetorial local (gerar com: python ingestao.py --destino chroma)
 chroma_db/
+
+# Segredos do Streamlit (use .streamlit/secrets.toml.example como modelo)
+.streamlit/secrets.toml
