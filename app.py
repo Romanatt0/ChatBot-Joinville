@@ -1,10 +1,13 @@
 import asyncio
 import base64
+import threading
 from pathlib import Path
 
 import streamlit as st
 from langchain.agents import create_agent
 from langchain_chroma import Chroma
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
@@ -16,6 +19,20 @@ st.set_page_config(page_title="Chat Ville", layout="wide")
 # ---------------------------------------------------------------------------
 # Recursos (criados uma vez e reaproveitados entre os reruns do Streamlit)
 # ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner=False)
+def _event_loop():
+    # Um único loop em segundo plano: os clientes HTTP assíncronos (Ollama, MCP)
+    # ficam presos ao loop em que foram criados, então não dá para usar
+    # asyncio.run() (que cria e fecha um loop novo) a cada chamada.
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    return loop
+
+
+def run_async(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _event_loop()).result()
+
 
 @st.cache_resource(show_spinner=False)
 def load_retriever():
@@ -34,7 +51,7 @@ def _load_mcp_tools():
     client = MultiServerMCPClient({
         "joinville": {"transport": "http", "url": config.MCP_URL},
     })
-    return asyncio.run(client.get_tools())
+    return run_async(client.get_tools())
 
 
 def get_mcp_tools():
@@ -45,31 +62,51 @@ def get_mcp_tools():
         return [], str(e)
 
 
+def make_rag_tool(retriever):
+    """Expõe a base vetorial como ferramenta: o agente decide quando e o que buscar."""
+
+    @tool
+    def buscar_info_joinville(consulta: str) -> str:
+        """Busca informações sobre Joinville (história, fundação, população,
+        geografia, economia, cultura, turismo, eventos) na base de conhecimento.
+
+        Args:
+            consulta: termos de busca em português, ex.: "data de fundação".
+        """
+        docs = retriever.invoke(consulta)
+        if not docs:
+            return "Nenhuma informação encontrada."
+        return "\n\n---\n\n".join(d.page_content for d in docs)
+
+    return buscar_info_joinville
+
+
 @st.cache_resource(show_spinner=False)
-def load_agent(model: str, tool_names: tuple, _tools: list):
-    # tool_names entra na chave do cache; _tools (não-hasheável) é ignorado pelo Streamlit.
+def load_agent(model: str, mcp_tool_names: tuple, _mcp_tools: list, _retriever):
+    # mcp_tool_names entra na chave do cache; parâmetros com "_" são ignorados pelo Streamlit.
     llm = ChatOllama(model=model, temperature=0)
-    return create_agent(llm, _tools, system_prompt=config.SYSTEM_PROMPT)
+    tools = [make_rag_tool(_retriever), *_mcp_tools]
+    return create_agent(llm, tools, system_prompt=config.SYSTEM_PROMPT)
 
 
 # ---------------------------------------------------------------------------
 # Lógica do chat
 # ---------------------------------------------------------------------------
 
-def build_user_message(context: str, question: str) -> str:
-    return (
-        f"Contexto sobre Joinville:\n{context}\n\n"
-        f"Pergunta: {question}"
-    )
+def answer(agent, history: list[dict]) -> tuple[str, list[str]]:
+    """Envia as últimas mensagens ao agente. Retorna (resposta, ferramentas usadas)."""
+    valid = [m for m in history if not m.get("error")]
+    messages = [{"role": m["role"], "content": m["content"]}
+                for m in valid[-config.HISTORY_LIMIT:]]
+    response = run_async(agent.ainvoke({"messages": messages}))
 
-
-def answer(agent, retriever, question: str) -> str:
-    docs = retriever.invoke(question)
-    context = "\n\n".join(d.page_content for d in docs)
-    response = asyncio.run(agent.ainvoke(
-        {"messages": [{"role": "user", "content": build_user_message(context, question)}]}
-    ))
-    return response["messages"][-1].text
+    new_messages = response["messages"][len(messages):]
+    tools_used = [
+        call["name"]
+        for msg in new_messages if isinstance(msg, AIMessage)
+        for call in msg.tool_calls
+    ]
+    return response["messages"][-1].text, tools_used
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +151,7 @@ def main():
 
     retriever = load_retriever()
     tools, mcp_error = get_mcp_tools()
-    agent = load_agent(model, tuple(t.name for t in tools), tools)
+    agent = load_agent(model, tuple(t.name for t in tools), tools, retriever)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -126,6 +163,8 @@ def main():
         for msg in st.session_state.messages:
             prefix = "**Você:**" if msg["role"] == "user" else "**Bot:**"
             st.markdown(f"{prefix} {msg['content']}")
+            if msg.get("tools"):
+                st.caption("🔧 Ferramentas usadas: " + ", ".join(msg["tools"]))
 
         with st.form(key="chat_form", clear_on_submit=True):
             user_input = st.text_input("Digite sua mensagem")
@@ -135,10 +174,12 @@ def main():
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.spinner("Gerando resposta..."):
                 try:
-                    reply = answer(agent, retriever, user_input)
+                    reply, tools_used = answer(agent, st.session_state.messages)
+                    bot_msg = {"role": "assistant", "content": reply, "tools": tools_used}
                 except Exception as e:
-                    reply = f"⚠️ Erro ao gerar resposta: {e}"
-            st.session_state.messages.append({"role": "assistant", "content": reply})
+                    bot_msg = {"role": "assistant", "content": f"⚠️ Erro ao gerar resposta: {e}",
+                               "error": True}
+            st.session_state.messages.append(bot_msg)
             st.rerun()
 
     with col2:

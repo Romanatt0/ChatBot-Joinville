@@ -1,25 +1,31 @@
 # Chat Ville — Chatbot sobre Joinville
 
-Chat Ville é um projeto pessoal de estudo sobre **agentes de IA com LangChain**. É um chatbot em Streamlit, especializado na cidade de Joinville (SC), que roda **100% local** via [Ollama](https://ollama.com) e combina duas fontes de informação:
+Chat Ville é um projeto pessoal de estudo sobre **agentes de IA com LangChain**. É um chatbot em Streamlit, especializado na cidade de Joinville (SC), que roda **100% local** via [Ollama](https://ollama.com).
 
-- **RAG (base vetorial):** um artigo sobre Joinville (`texto.txt`) é dividido em trechos, transformado em embeddings e salvo no Chroma. A cada pergunta, os trechos mais relevantes são enviados ao modelo como contexto.
-- **Ferramentas via MCP:** o agente se conecta a um servidor [MCP](https://modelcontextprotocol.io) que expõe ferramentas externas — hoje, a **previsão do tempo em Joinville** (API Open-Meteo).
+O bot é um **agente**: a cada pergunta, o modelo decide sozinho qual ferramenta usar — ou se deve recusar a pergunta — e responde com base no que as ferramentas retornarem:
+
+| Ferramenta | Origem | Quando o agente usa |
+|---|---|---|
+| `buscar_info_joinville` | Local (RAG sobre o `texto.txt` no Chroma) | História, dados, cultura e turismo da cidade |
+| `previsao_tempo_joinville` | Servidor [MCP](https://modelcontextprotocol.io) (API Open-Meteo) | Clima, temperatura e chuva |
+
+O agente também recebe o **histórico da conversa**, então entende perguntas de continuação ("E quantos habitantes tem?"). A interface mostra quais ferramentas foram usadas em cada resposta.
 
 ## Arquitetura
 
 ```
-┌──────────────┐   pergunta    ┌───────────────────────────┐
-│  Streamlit   │ ────────────► │  Agente LangChain         │
-│  (app.py)    │ ◄──────────── │  (create_agent + Ollama)  │
-└──────────────┘   resposta    └──────┬─────────────┬──────┘
-                                      │             │
-                          contexto    │             │  ferramentas
-                                      ▼             ▼
-                        ┌──────────────────┐  ┌──────────────────────┐
-                        │ Chroma           │  │ Servidor MCP         │
-                        │ (chroma_db/)     │  │ localhost:8000/mcp   │
-                        │ gerado por rag.py│  │ previsao_tempo_...   │
-                        └──────────────────┘  └──────────────────────┘
+┌──────────────┐  pergunta + histórico  ┌───────────────────────────┐
+│  Streamlit   │ ─────────────────────► │  Agente LangChain         │
+│  (app.py)    │ ◄───────────────────── │  (create_agent + Ollama)  │
+└──────────────┘  resposta + ferramentas└──────┬─────────────┬──────┘
+                                               │             │
+                         buscar_info_joinville │             │ previsao_tempo_joinville
+                                               ▼             ▼
+                                 ┌──────────────────┐  ┌──────────────────────┐
+                                 │ Chroma           │  │ Servidor MCP         │
+                                 │ (chroma_db/)     │  │ localhost:8000/mcp   │
+                                 │ gerado por rag.py│  │                      │
+                                 └──────────────────┘  └──────────────────────┘
 ```
 
 ## Estrutura do projeto
@@ -56,7 +62,9 @@ ollama pull nomic-embed-text-v2-moe   # embeddings (obrigatório)
 ollama pull qwen2.5:3b                # modelo de chat padrão
 ```
 
-Os outros modelos disponíveis no seletor da barra lateral (`gemma:7b`, `cnmoro/mistral_7b_portuguese:q5_K_M`) são opcionais.
+Opcional: `ollama pull llama3.1:8b` — mais lento, mas segue melhor as instruções e usa as ferramentas com mais consistência.
+
+> O modelo de chat **precisa suportar ferramentas** (tool calling). Confira com `ollama show <modelo>` — deve aparecer `tools` em *Capabilities*. Modelos como `gemma:7b` não suportam e dão erro.
 
 ### 3. Gerar a base vetorial
 
@@ -108,7 +116,8 @@ Todas as opções ficam em `config.py` e podem ser sobrescritas por variáveis d
 | `CHATVILLE_EMBEDDING_MODEL` | `nomic-embed-text-v2-moe` | Modelo de embeddings do Ollama |
 | `CHATVILLE_CHROMA_DIR` | `./chroma_db` | Pasta da base vetorial |
 | `CHATVILLE_COLLECTION` | `chatville` | Nome da coleção no Chroma |
-| `CHATVILLE_RETRIEVER_K` | `3` | Quantidade de trechos enviados como contexto |
+| `CHATVILLE_RETRIEVER_K` | `3` | Quantidade de trechos retornados pela busca |
+| `CHATVILLE_HISTORY_LIMIT` | `10` | Mensagens anteriores enviadas ao agente (memória) |
 | `CHATVILLE_SOURCE_TEXT` | `texto.txt` | Texto usado pelo `rag.py` |
 
 ## Exemplos de perguntas
@@ -124,13 +133,14 @@ Todas as opções ficam em `config.py` e podem ser sobrescritas por variáveis d
 | Aviso "Servidor MCP indisponível" | Servidor MCP não está rodando ou `CHATVILLE_MCP_URL` está errada |
 | Respostas sem relação com Joinville / sem contexto | `chroma_db/` não foi gerado — rode `python rag.py` |
 | Erro `model not found` | Modelo não baixado — rode `ollama pull <modelo>` |
+| Erro `does not support tools` | O modelo escolhido não suporta ferramentas — use um da lista |
 | Erro de conexão com Ollama | Ollama não está rodando (`ollama serve`) |
 
 ## Próximos passos
 
-- Enviar o histórico da conversa ao agente (memória)
-- Transformar a busca na base em uma ferramenta do agente
+- Mais ferramentas no servidor MCP (eventos, pontos turísticos, transporte)
 - Ampliar e limpar a base de conhecimento, mostrando as fontes nas respostas
+- Conjunto de perguntas de avaliação para medir a taxa de acerto
 - Interface com `st.chat_message` e respostas em streaming
 
 ## Contato
