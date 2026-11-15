@@ -6,7 +6,7 @@ from pathlib import Path
 import streamlit as st
 from langchain.agents import create_agent
 from langchain_chroma import Chroma
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_ollama import ChatOllama, OllamaEmbeddings
@@ -83,29 +83,56 @@ def make_rag_tool(retriever):
 
 @st.cache_resource(show_spinner=False)
 def load_agent(model: str, mcp_tool_names: tuple, _mcp_tools: list, _retriever):
+    """Retorna (agente, ferramenta de busca)."""
     # mcp_tool_names entra na chave do cache; parâmetros com "_" são ignorados pelo Streamlit.
-    llm = ChatOllama(model=model, temperature=0)
-    tools = [make_rag_tool(_retriever), *_mcp_tools]
-    return create_agent(llm, tools, system_prompt=config.SYSTEM_PROMPT)
+    # num_predict limita o tamanho da resposta: sem ele, modelos pequenos às vezes
+    # entram em loop repetindo texto e a resposta nunca termina.
+    llm = ChatOllama(model=model, temperature=0, num_predict=1024)
+    rag_tool = make_rag_tool(_retriever)
+    agent = create_agent(llm, [rag_tool, *_mcp_tools], system_prompt=config.SYSTEM_PROMPT)
+    return agent, rag_tool
 
 
 # ---------------------------------------------------------------------------
 # Lógica do chat
 # ---------------------------------------------------------------------------
 
-def answer(agent, history: list[dict]) -> tuple[str, list[str]]:
+def _tools_called(messages) -> list[str]:
+    return [call["name"] for m in messages if isinstance(m, AIMessage) for call in m.tool_calls]
+
+
+_REFUSAL_MARKERS = ("recus", "não posso ajudar", "não posso responder", "só posso",
+                    "somente sobre joinville", "apenas sobre joinville", "não é sobre joinville")
+
+
+def _is_refusal(text: str) -> bool:
+    return any(marker in text.lower() for marker in _REFUSAL_MARKERS)
+
+
+def answer(agent, rag_tool, history: list[dict]) -> tuple[str, list[str]]:
     """Envia as últimas mensagens ao agente. Retorna (resposta, ferramentas usadas)."""
     valid = [m for m in history if not m.get("error")]
     messages = [{"role": m["role"], "content": m["content"]}
                 for m in valid[-config.HISTORY_LIMIT:]]
     response = run_async(agent.ainvoke({"messages": messages}))
+    tools_used = _tools_called(response["messages"][len(messages):])
 
-    new_messages = response["messages"][len(messages):]
-    tools_used = [
-        call["name"]
-        for msg in new_messages if isinstance(msg, AIMessage)
-        for call in msg.tool_calls
-    ]
+    if not tools_used and not _is_refusal(response["messages"][-1].text):
+        # Busca de reserva: modelos pequenos às vezes respondem "de cabeça" sem
+        # consultar nada (e o Ollama não suporta tool_choice para forçar). Nesse caso
+        # fazemos a busca pelo agente, com a própria pergunta, e ele responde de novo.
+        # Se o modelo recusou (pergunta fora do tema), mantemos a recusa.
+        question = messages[-1]["content"]
+        call = {"name": rag_tool.name, "args": {"consulta": question}, "id": "busca-reserva"}
+        result = run_async(rag_tool.ainvoke(call["args"]))
+        messages += [
+            AIMessage(content="", tool_calls=[call]),
+            ToolMessage(content=result, tool_call_id=call["id"]),
+        ]
+        response = run_async(agent.ainvoke({"messages": messages}))
+        tools_used = [f"{rag_tool.name} (automática)"]
+        tools_used += _tools_called(response["messages"][len(messages):])
+
     return response["messages"][-1].text, tools_used
 
 
@@ -151,7 +178,7 @@ def main():
 
     retriever = load_retriever()
     tools, mcp_error = get_mcp_tools()
-    agent = load_agent(model, tuple(t.name for t in tools), tools, retriever)
+    agent, rag_tool = load_agent(model, tuple(t.name for t in tools), tools, retriever)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -174,7 +201,7 @@ def main():
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.spinner("Gerando resposta..."):
                 try:
-                    reply, tools_used = answer(agent, st.session_state.messages)
+                    reply, tools_used = answer(agent, rag_tool, st.session_state.messages)
                     bot_msg = {"role": "assistant", "content": reply, "tools": tools_used}
                 except Exception as e:
                     bot_msg = {"role": "assistant", "content": f"⚠️ Erro ao gerar resposta: {e}",

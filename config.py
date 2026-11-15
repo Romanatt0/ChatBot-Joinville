@@ -20,7 +20,7 @@ HISTORY_LIMIT = int(os.getenv("CHATVILLE_HISTORY_LIMIT", "10"))
 CHROMA_DIR = os.getenv("CHATVILLE_CHROMA_DIR", "./chroma_db")
 COLLECTION_NAME = os.getenv("CHATVILLE_COLLECTION", "chatville")
 RETRIEVER_K = int(os.getenv("CHATVILLE_RETRIEVER_K", "3"))
-SOURCE_TEXT = os.getenv("CHATVILLE_SOURCE_TEXT", "texto.txt")
+SOURCE_TEXT = os.getenv("CHATVILLE_SOURCE_TEXT", "dados/joinville.md")
 
 # Servidor MCP (https://github.com/Romanatt0/MCP-SERVER)
 MCP_URL = os.getenv("CHATVILLE_MCP_URL", "http://localhost:8000/mcp")

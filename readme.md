@@ -6,7 +6,7 @@ O bot é um **agente**: a cada pergunta, o modelo decide sozinho qual ferramenta
 
 | Ferramenta | Origem | Quando o agente usa |
 |---|---|---|
-| `buscar_info_joinville` | Local (RAG sobre o `texto.txt` no Chroma) | História, dados, cultura e turismo da cidade |
+| `buscar_info_joinville` | Local (RAG sobre `dados/joinville.md` no Chroma) | História, dados, cultura e turismo da cidade |
 | `previsao_tempo_joinville` | Servidor [MCP](https://modelcontextprotocol.io) (API Open-Meteo) | Clima, temperatura e chuva |
 
 O agente também recebe o **histórico da conversa**, então entende perguntas de continuação ("E quantos habitantes tem?"). A interface mostra quais ferramentas foram usadas em cada resposta.
@@ -28,14 +28,47 @@ O agente também recebe o **histórico da conversa**, então entende perguntas d
                                  └──────────────────┘  └──────────────────────┘
 ```
 
+## Como funciona
+
+**Base de conhecimento.** `dados/joinville.md` é um artigo sobre Joinville organizado em seções Markdown, com uma seção *Dados gerais* (fundação, população, prefeito, área...) em formato de lista. O `rag.py` divide o texto respeitando essas seções:
+
+- cada item da lista *Dados gerais* vira um trecho próprio, então a busca acha exatamente o fato pedido;
+- as demais seções são divididas em trechos de até 1000 caracteres, sem misturar seções;
+- todo trecho começa com o caminho da seção (`[Joinville > História > Origens e povoamento]`), o que dá contexto à busca e ao modelo.
+
+**Busca de reserva.** Modelos pequenos às vezes respondem "de cabeça", sem consultar nada (e o Ollama não permite forçar o uso de ferramentas). Quando isso acontece e a resposta não é uma recusa, o app faz a busca pelo agente com a própria pergunta e pede a resposta de novo. A interface marca esses casos como `buscar_info_joinville (automática)`.
+
+**Limite de resposta.** As respostas são limitadas a 1024 tokens (`num_predict`): sem isso, modelos pequenos às vezes entram em loop repetindo texto e a resposta nunca termina.
+
+## Avaliação
+
+`avaliar.py` faz 15 perguntas com resposta conhecida e mede:
+
+- **Busca:** se o trecho com a resposta aparece nos resultados;
+- **Respostas:** se a resposta final do agente contém o valor correto.
+
+| Versão | Busca | Respostas (`qwen2.5:3b`) |
+|---|---|---|
+| Texto cru da Wikipédia, contexto sempre no prompt | 9/15 | 4/15 |
+| Texto organizado em seções + fatos isolados | 14/15 | 8/15 |
+| + busca de reserva | 14/15 | 12/15 |
+
+```powershell
+python avaliar.py                      # só a busca (segundos)
+python avaliar.py --agente qwen2.5:3b  # busca + respostas (~1,5 min)
+```
+
+**Limitações conhecidas** com o `qwen2.5:3b`: às vezes acrescenta informações que não estão na base (ex.: sobrenome do prefeito), nem sempre recusa perguntas fora do tema, e a busca não liga "apelidos" a "títulos" (o texto diz *"ostenta os títulos de..."*).
+
 ## Estrutura do projeto
 
 | Arquivo | Função |
 |---|---|
 | `app.py` | Interface Streamlit e agente (RAG + ferramentas MCP) |
-| `rag.py` | Gera a base vetorial a partir do `texto.txt` |
+| `rag.py` | Gera a base vetorial a partir de `dados/joinville.md` |
+| `avaliar.py` | Mede a taxa de acerto da busca e do agente com perguntas de gabarito |
 | `config.py` | Modelos, caminhos, URL do MCP e prompt do bot |
-| `texto.txt` | Fonte de conhecimento sobre Joinville |
+| `dados/joinville.md` | Base de conhecimento sobre Joinville (Markdown com seções) |
 | `.streamlit/` | Tema e CSS da interface |
 | `images/` | Imagem de fundo |
 
@@ -72,7 +105,7 @@ Opcional: `ollama pull llama3.1:8b` — mais lento, mas segue melhor as instruç
 python rag.py
 ```
 
-Rode de novo sempre que alterar o `texto.txt` ou o modelo de embeddings. A pasta `chroma_db/` é gerada localmente e não é versionada.
+Rode de novo sempre que alterar `dados/joinville.md` ou o modelo de embeddings. A pasta `chroma_db/` é gerada localmente e não é versionada.
 
 ### 4. Subir o servidor MCP
 
@@ -118,7 +151,7 @@ Todas as opções ficam em `config.py` e podem ser sobrescritas por variáveis d
 | `CHATVILLE_COLLECTION` | `chatville` | Nome da coleção no Chroma |
 | `CHATVILLE_RETRIEVER_K` | `3` | Quantidade de trechos retornados pela busca |
 | `CHATVILLE_HISTORY_LIMIT` | `10` | Mensagens anteriores enviadas ao agente (memória) |
-| `CHATVILLE_SOURCE_TEXT` | `texto.txt` | Texto usado pelo `rag.py` |
+| `CHATVILLE_SOURCE_TEXT` | `dados/joinville.md` | Texto usado pelo `rag.py` |
 
 ## Exemplos de perguntas
 
@@ -139,8 +172,8 @@ Todas as opções ficam em `config.py` e podem ser sobrescritas por variáveis d
 ## Próximos passos
 
 - Mais ferramentas no servidor MCP (eventos, pontos turísticos, transporte)
-- Ampliar e limpar a base de conhecimento, mostrando as fontes nas respostas
-- Conjunto de perguntas de avaliação para medir a taxa de acerto
+- Ampliar a base de conhecimento e mostrar as fontes nas respostas
+- Ampliar o conjunto de avaliação (perguntas de continuação e fora do tema)
 - Interface com `st.chat_message` e respostas em streaming
 
 ## Contato
