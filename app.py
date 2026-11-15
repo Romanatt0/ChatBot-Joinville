@@ -1,58 +1,89 @@
 import asyncio
-import streamlit as st
-from langchain_ollama import ChatOllama
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
-from pathlib import Path
 import base64
-import nest_asyncio
-nest_asyncio.apply() 
+from pathlib import Path
+
+import streamlit as st
+from langchain.agents import create_agent
+from langchain_chroma import Chroma
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+
+import config
 
 st.set_page_config(page_title="Chat Ville", layout="wide")
 
-def get_base64(bin_file):
-    with open(bin_file, 'rb') as f:
-        return base64.b64encode(f.read()).decode()
 
-def build_prompt(context: str) -> SystemMessage:
-    content = (
-        "Você é um assistente amigável chamado Bot-Ville que responderá somente "
-        "sobre perguntas relacionadas à cidade de Joinville/Santa Catarina. "
-        "Seu objetivo é fornecer informações úteis e precisas sobre a cidade. "
-        f"Com base neste contexto:\n{context}\n\n"
-        "Responda de forma detalhada somente com os dados fornecidos a você."
+# ---------------------------------------------------------------------------
+# Recursos (criados uma vez e reaproveitados entre os reruns do Streamlit)
+# ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner=False)
+def load_retriever():
+    embeddings = OllamaEmbeddings(model=config.EMBEDDING_MODEL)
+    vectorstore = Chroma(
+        persist_directory=config.CHROMA_DIR,
+        embedding_function=embeddings,
+        collection_name=config.COLLECTION_NAME,
     )
-    return SystemMessage(content=content)
+    return vectorstore.as_retriever(search_kwargs={"k": config.RETRIEVER_K})
 
-async def get_response(agent, retriever, user_text: str) -> str:
+
+@st.cache_resource(show_spinner=False)
+def _load_mcp_tools():
+    # Exceções não são cacheadas: se o servidor estiver fora, tenta de novo no próximo rerun.
+    client = MultiServerMCPClient({
+        "joinville": {"transport": "http", "url": config.MCP_URL},
+    })
+    return asyncio.run(client.get_tools())
+
+
+def get_mcp_tools():
+    """Retorna (ferramentas, erro). Sem servidor MCP o app continua só com o RAG."""
     try:
-        docs = retriever.invoke(user_text)
-        context = "\n".join([d.page_content for d in docs])
+        return _load_mcp_tools(), None
+    except Exception as e:  # inclui ExceptionGroup do anyio
+        return [], str(e)
 
-        agent_with_context = create_react_agent(
-            agent.nodes["agent"].bound,  
-            agent.nodes["tools"].tools_by_name.values(),
-            prompt=build_prompt(context),
-        )
 
-        response = await agent_with_context.ainvoke(
-            {"messages": [{"role": "user", "content": user_text}]}
-        )
-        return response["messages"][-1].content
+@st.cache_resource(show_spinner=False)
+def load_agent(model: str, tool_names: tuple, _tools: list):
+    # tool_names entra na chave do cache; _tools (não-hasheável) é ignorado pelo Streamlit.
+    llm = ChatOllama(model=model, temperature=0)
+    return create_agent(llm, _tools, system_prompt=config.SYSTEM_PROMPT)
 
-    except Exception as e:
-        return f"Erro: {e}"
 
-async def main():
+# ---------------------------------------------------------------------------
+# Lógica do chat
+# ---------------------------------------------------------------------------
 
-    with open('.streamlit/custom.css') as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-    img_path = "images/joinville-img.jpg"
-    if Path(img_path).exists():
-        img_base64 = get_base64(img_path)
+def build_user_message(context: str, question: str) -> str:
+    return (
+        f"Contexto sobre Joinville:\n{context}\n\n"
+        f"Pergunta: {question}"
+    )
+
+
+def answer(agent, retriever, question: str) -> str:
+    docs = retriever.invoke(question)
+    context = "\n\n".join(d.page_content for d in docs)
+    response = asyncio.run(agent.ainvoke(
+        {"messages": [{"role": "user", "content": build_user_message(context, question)}]}
+    ))
+    return response["messages"][-1].text
+
+
+# ---------------------------------------------------------------------------
+# Interface
+# ---------------------------------------------------------------------------
+
+def apply_styles():
+    css_path = Path(".streamlit/custom.css")
+    if css_path.exists():
+        st.markdown(f"<style>{css_path.read_text()}</style>", unsafe_allow_html=True)
+
+    img_path = Path("images/joinville-img.jpg")
+    if img_path.exists():
+        img_base64 = base64.b64encode(img_path.read_bytes()).decode()
         st.markdown(f"""
             <style>
             .stApp {{
@@ -72,52 +103,18 @@ async def main():
             </style>
         """, unsafe_allow_html=True)
 
-    st.markdown(
-        """
-        <style>
 
-
-        .stAppViewContainer.appview-container.st-emotion-cache-1yiq2ps.e1td4qo60 {
-            border-radius: 10px; /* Arredonda todos os 4 cantos com 10px */
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
+def main():
+    apply_styles()
     st.title("Chat Ville — Guia de Joinville")
 
-    
     with st.sidebar:
         st.header("Configuração")
-        model = st.selectbox(
-            "Modelo",
-            ["qwen2.5:3b", "gemma:7b", "cnmoro/mistral_7b_portuguese:q5_K_M"],
-            index=0
-        )
+        model = st.selectbox("Modelo", config.CHAT_MODELS, index=0)
 
-    
-    @st.cache_resource
-    def load_resources():
-        embeddings = OllamaEmbeddings(model="nomic-embed-text-v2-moe")
-        vectorstore = Chroma(
-            persist_directory="./chroma_db",
-            embedding_function=embeddings,
-            collection_name="chatville"
-        )
-        return vectorstore.as_retriever(search_kwargs={"k": 3})
-
-    retriever = load_resources()
-
-    client = MultiServerMCPClient({
-        "weather": {
-            "transport": "http",
-            "url": "http://localhost:8000/mcp",
-        }
-    })
-    tools = await client.get_tools()
-    llm = ChatOllama(model=model, temperature=0)
-    agent = create_react_agent(llm, tools)
+    retriever = load_retriever()
+    tools, mcp_error = get_mcp_tools()
+    agent = load_agent(model, tuple(t.name for t in tools), tools)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -130,38 +127,36 @@ async def main():
             prefix = "**Você:**" if msg["role"] == "user" else "**Bot:**"
             st.markdown(f"{prefix} {msg['content']}")
 
-    with st.form(key="chat_form", clear_on_submit=True):
-        user_input = st.text_input("Digite sua mensagem")
-        submit = st.form_submit_button("Enviar")
-    if submit and user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.form(key="chat_form", clear_on_submit=True):
+            user_input = st.text_input("Digite sua mensagem")
+            submit = st.form_submit_button("Enviar")
 
-        with st.spinner("Gerando resposta..."):
-            docs = retriever.invoke(user_input)
-            context = "\n".join([d.page_content for d in docs])
-
-            agent_ctx = create_react_agent(
-                llm, tools, prompt=build_prompt(context)
-            )
-
-            loop = asyncio.get_event_loop()
-            response = loop.run_until_complete(
-                agent_ctx.ainvoke(
-                    {"messages": [{"role": "user", "content": user_input}]}
-                )
-            )
-            reply = response["messages"][-1].content
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.rerun()
-
-        if st.button("Limpar histórico"):
-            st.session_state.messages = []
+        if submit and user_input:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.spinner("Gerando resposta..."):
+                try:
+                    reply = answer(agent, retriever, user_input)
+                except Exception as e:
+                    reply = f"⚠️ Erro ao gerar resposta: {e}"
+            st.session_state.messages.append({"role": "assistant", "content": reply})
             st.rerun()
 
     with col2:
         st.subheader("Ações")
         st.write("Faça perguntas ao bot sobre Joinville.")
 
+        if st.button("Limpar histórico"):
+            st.session_state.messages = []
+            st.rerun()
+
+        st.divider()
+        if mcp_error:
+            st.warning("Servidor MCP indisponível — respondendo só com a base local.")
+            if st.button("Tentar reconectar"):
+                st.rerun()
+        else:
+            st.success(f"MCP conectado ({len(tools)} ferramenta(s))")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

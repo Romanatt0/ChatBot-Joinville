@@ -1,33 +1,39 @@
+"""Gera a base vetorial (Chroma) a partir do texto.txt.
+
+Rode sempre que alterar o texto ou o modelo de embeddings:
+    python rag.py
+"""
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
+
+import config
 
 
-with open("texto.txt", "r", encoding="utf-8") as f:
-    docs = f.read()
+def main():
+    with open(config.SOURCE_TEXT, "r", encoding="utf-8") as f:
+        text = f.read()
 
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=800,
-    chunk_overlap=80,
-    
-)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
+    chunks = splitter.split_text(text)
 
-chunks_text = splitter.split_text(docs)
+    embeddings = OllamaEmbeddings(model=config.EMBEDDING_MODEL)
+
+    # Recria a coleção do zero para não duplicar trechos a cada execução.
+    Chroma(
+        persist_directory=config.CHROMA_DIR,
+        embedding_function=embeddings,
+        collection_name=config.COLLECTION_NAME,
+    ).delete_collection()
+
+    Chroma.from_texts(
+        texts=chunks,
+        embedding=embeddings,
+        persist_directory=config.CHROMA_DIR,
+        collection_name=config.COLLECTION_NAME,
+    )
+    print(f"{len(chunks)} trechos indexados em {config.CHROMA_DIR} (coleção '{config.COLLECTION_NAME}').")
 
 
-for i, c in enumerate(chunks_text):
-    print(f"\n--- Chunk {i} ---")
-    print(c)
-
-embeddings = OllamaEmbeddings(
-    model="nomic-embed-text-v2-moe"
-) 
-
-vectorstore = Chroma.from_texts(
-    texts=chunks_text,
-    embedding=embeddings,
-    persist_directory="./chroma_db",
-    collection_name="chatville"
-)
-
-vectorstore.persist()
+if __name__ == "__main__":
+    main()
