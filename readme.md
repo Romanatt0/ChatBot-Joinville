@@ -11,6 +11,8 @@ O bot é um **agente**: a cada pergunta, o modelo decide sozinho qual ferramenta
 
 O agente também recebe o **histórico da conversa**, então entende perguntas de continuação ("E quantos habitantes tem?"). A interface mostra quais ferramentas foram usadas em cada resposta.
 
+![Demonstração do Chat Ville: uma pergunta respondida com a base local (RAG) e outra sobre o clima usando a ferramenta MCP](images/chatville-demo.gif)
+
 ## Arquitetura
 
 ```

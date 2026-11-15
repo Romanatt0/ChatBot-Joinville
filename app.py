@@ -22,9 +22,10 @@ st.set_page_config(page_title="Chat Ville", layout="wide")
 
 @st.cache_resource(show_spinner=False)
 def _event_loop():
-    # Um único loop em segundo plano: os clientes HTTP assíncronos (Ollama, MCP)
-    # ficam presos ao loop em que foram criados, então não dá para usar
-    # asyncio.run() (que cria e fecha um loop novo) a cada chamada.
+    # Um único loop persistente: o agente e as ferramentas MCP guardam clientes
+    # assíncronos presos ao loop em que foram criados. Com asyncio.run() a cada
+    # pergunta, o loop anterior é fechado e a 2ª mensagem falha com
+    # "Event loop is closed".
     loop = asyncio.new_event_loop()
     threading.Thread(target=loop.run_forever, daemon=True).start()
     return loop
