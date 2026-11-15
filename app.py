@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import threading
 from pathlib import Path
 
 import streamlit as st
@@ -18,6 +19,21 @@ st.set_page_config(page_title="Chat Ville", layout="wide")
 # ---------------------------------------------------------------------------
 
 @st.cache_resource(show_spinner=False)
+def _event_loop():
+    # Um único loop persistente: o agente e as ferramentas MCP guardam clientes
+    # assíncronos presos ao loop em que foram criados. Com asyncio.run() a cada
+    # pergunta, o loop anterior é fechado e a 2ª mensagem falha com
+    # "Event loop is closed".
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    return loop
+
+
+def run_async(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _event_loop()).result()
+
+
+@st.cache_resource(show_spinner=False)
 def load_retriever():
     embeddings = OllamaEmbeddings(model=config.EMBEDDING_MODEL)
     vectorstore = Chroma(
@@ -34,7 +50,7 @@ def _load_mcp_tools():
     client = MultiServerMCPClient({
         "joinville": {"transport": "http", "url": config.MCP_URL},
     })
-    return asyncio.run(client.get_tools())
+    return run_async(client.get_tools())
 
 
 def get_mcp_tools():
@@ -66,7 +82,7 @@ def build_user_message(context: str, question: str) -> str:
 def answer(agent, retriever, question: str) -> str:
     docs = retriever.invoke(question)
     context = "\n\n".join(d.page_content for d in docs)
-    response = asyncio.run(agent.ainvoke(
+    response = run_async(agent.ainvoke(
         {"messages": [{"role": "user", "content": build_user_message(context, question)}]}
     ))
     return response["messages"][-1].text

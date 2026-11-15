@@ -5,6 +5,8 @@ Chat Ville é um projeto pessoal de estudo sobre **agentes de IA com LangChain**
 - **RAG (base vetorial):** um artigo sobre Joinville (`texto.txt`) é dividido em trechos, transformado em embeddings e salvo no Chroma. A cada pergunta, os trechos mais relevantes são enviados ao modelo como contexto.
 - **Ferramentas via MCP:** o agente se conecta a um servidor [MCP](https://modelcontextprotocol.io) que expõe ferramentas externas — hoje, a **previsão do tempo em Joinville** (API Open-Meteo).
 
+![Demonstração do Chat Ville: uma pergunta respondida com a base local (RAG) e outra sobre o clima usando a ferramenta MCP](images/chatville-demo.gif)
+
 ## Arquitetura
 
 ```
